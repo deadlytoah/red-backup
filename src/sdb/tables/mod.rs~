@@ -1,0 +1,8 @@
+pub mod naive;
+
+use error::Error;
+use sdb;
+
+pub trait Object {
+    fn create<C: Crud>(sdb: &mut sdb::Sdb, name: &str) -> Result<C, Error>;
+}

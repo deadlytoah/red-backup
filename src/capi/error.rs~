@@ -1,0 +1,104 @@
+use libc::{c_char, uint32_t, size_t, strncpy};
+use error::{Error, ErrorKind};
+use std::cell::{Cell, RefCell};
+use std::error::Error as StdError;
+use std::ffi::CString;
+
+thread_local! {
+    static ERROR_CODE: Cell<uint32_t> = Cell::new(0);
+    static ERROR_STR: RefCell<CString> = RefCell::new(CString::default());
+}
+
+#[no_mangle]
+pub extern "C" fn sdb_error() -> uint32_t {
+    ERROR_CODE.with(|ec| ec.get())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sdb_error_msg(buf: *mut c_char, buflen: size_t) {
+    ERROR_STR.with(|es| { strncpy(buf, es.borrow().as_ptr(), buflen); });
+}
+
+fn set_error_code(error_code: u32) {
+    ERROR_CODE.with(|ec| ec.set(error_code));
+}
+
+fn set_error_msg(error_msg: &str) {
+    ERROR_STR.with(|es| match CString::new(error_msg) {
+        Ok(cstr) => {
+            *es.borrow_mut() = cstr;
+        }
+        Err(err) => {
+            /*
+             * In an unlikely event where a nul character is found in
+             * the supplied error message, cut the string where the
+             * character is found.  We might lose some information,
+             * but we definitely don't want to take any chance of
+             * crashing an app for something as non-critical as
+             * passing error message.
+             */
+            let nul_pos = err.nul_position();
+            *es.borrow_mut() = CString::new(&error_msg[..nul_pos]).unwrap();
+        }
+    });
+}
+
+pub fn set_error<E: Into<Option<Error>>>(e: E) {
+    if let Some(error) = e.into() {
+        match *error.kind() {
+            ErrorKind::Fmt(ref err) => {
+                set_error_code(1);
+                set_error_msg(err.description());
+            }
+            ErrorKind::Io(ref err) => {
+                set_error_code(2);
+                set_error_msg(err.description());
+            }
+            ErrorKind::Nul(ref err) => {
+                set_error_code(3);
+                set_error_msg(err.description());
+            }
+            ErrorKind::ParseInt(ref err) => {
+                set_error_code(4);
+                set_error_msg(err.description());
+            }
+            ErrorKind::SerdeJson(ref err) => {
+                set_error_code(5);
+                set_error_msg(err.description());
+            }
+            ErrorKind::Utf8(ref err) => {
+                set_error_code(6);
+                set_error_msg(err.description());
+            }
+            ErrorKind::Msg(ref msg) => {
+                set_error_code(0x1000);
+                set_error_msg(msg);
+            }
+            ErrorKind::InvalidOp => {
+                set_error_code(0x1001);
+                set_error_msg(error.description());
+            }
+            ErrorKind::UnknownTableFormat => {
+                set_error_code(0x1002);
+                set_error_msg(error.description());
+            }
+        }
+    } else {
+        set_error_code(0);
+        set_error_msg("");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use capi::error::{ERROR_STR, set_error_msg};
+    use std::ffi::CString;
+
+    #[test]
+    fn test_handling_null_char() {
+        set_error_msg("abc\0def");
+        ERROR_STR.with(|es| {
+            assert_eq!(*es.borrow(), CString::new("abc").unwrap());
+        });
+    }
+}

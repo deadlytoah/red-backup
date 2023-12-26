@@ -1,0 +1,524 @@
+pub mod error;
+mod redun;
+
+use self::error::{ErrorKind, Result};
+pub use self::redun::Redundancy;
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use sha1::Sha1;
+use std;
+use std::fmt::{Debug, Formatter};
+use std::io::{Read, Write};
+use std::mem;
+use std::str;
+
+pub const METADATA_VERSION: Version = Version {
+    app: [b'X', b'O'],
+    major: 1,
+    minor: 2,
+    patch: 0,
+};
+
+pub const METADATA_SUFFIX: &str = ".meta";
+pub const RFILE_SUFFIX: &str = ".r";
+
+const PATH_LEN: usize = 4096;
+
+pub type Hash = [u8; 20];
+
+pub struct MetadataBody {
+    hash1: Hash,
+    hash2: Hash,
+    hashr: Hash,
+
+    rpath1_len: usize,
+    rpath1_str: [u8; PATH_LEN],
+    rpath2_len: usize,
+    rpath2_str: [u8; PATH_LEN],
+    rpathr_len: usize,
+    rpathr_str: [u8; PATH_LEN],
+}
+
+impl MetadataBody {
+    pub fn serialise<W>(&self, write: &mut W) -> Result<()>
+    where
+        W: Write,
+    {
+        write.write_all(&self.hash1)?;
+        write.write_all(&self.hash2)?;
+        write.write_all(&self.hashr)?;
+
+        write.write_u64::<LittleEndian>(self.rpath1_len as u64)?;
+        write.write_all(&self.rpath1_str)?;
+        write.write_u64::<LittleEndian>(self.rpath2_len as u64)?;
+        write.write_all(&self.rpath2_str)?;
+        write.write_u64::<LittleEndian>(self.rpathr_len as u64)?;
+        write.write_all(&self.rpathr_str)?;
+
+        Ok(())
+    }
+
+    pub fn deserialise<R>(&mut self, read: &mut R) -> Result<()>
+    where
+        R: Read,
+    {
+        read.read_exact(&mut self.hash1)?;
+        read.read_exact(&mut self.hash2)?;
+        read.read_exact(&mut self.hashr)?;
+
+        self.rpath1_len = read.read_u64::<LittleEndian>()? as usize;
+        read.read_exact(&mut self.rpath1_str)?;
+        self.rpath2_len = read.read_u64::<LittleEndian>()? as usize;
+        read.read_exact(&mut self.rpath2_str)?;
+        self.rpathr_len = read.read_u64::<LittleEndian>()? as usize;
+        read.read_exact(&mut self.rpathr_str)?;
+
+        Ok(())
+    }
+
+    pub fn size_on_disk() -> u64 {
+        let mut size: usize;
+        size = mem::size_of::<Hash>() * 3;
+        size += mem::size_of::<u64>() * 3;
+        size += PATH_LEN * 3;
+        size as u64
+    }
+}
+
+pub struct Metadata {
+    body: MetadataBody,
+}
+
+impl Metadata {
+    pub fn new(
+        hash1: Hash,
+        hash2: Hash,
+        hashr: Hash,
+        rpath1: &str,
+        rpath2: &str,
+        rpathr: &str,
+    ) -> Self {
+        let mut metadata = Self {
+            body: MetadataBody {
+                hash1,
+                hash2,
+                hashr,
+
+                rpath1_len: rpath1.len(),
+                rpath1_str: [0u8; 4096],
+                rpath2_len: rpath2.len(),
+                rpath2_str: [0u8; 4096],
+                rpathr_len: rpathr.len(),
+                rpathr_str: [0u8; 4096],
+            },
+        };
+
+        metadata.body.rpath1_str[..rpath1.len()].copy_from_slice(rpath1.as_bytes());
+        metadata.body.rpath2_str[..rpath2.len()].copy_from_slice(rpath2.as_bytes());
+        metadata.body.rpathr_str[..rpathr.len()].copy_from_slice(rpathr.as_bytes());
+        metadata
+    }
+
+    pub fn serialise<W>(&self, out: &mut W) -> Result<()>
+    where
+        W: Write,
+    {
+        self.body.serialise(out)
+    }
+
+    pub fn deserialise<R>(&mut self, read: &mut R) -> Result<()>
+    where
+        R: Read,
+    {
+        self.body.deserialise(read)
+    }
+
+    pub fn hash1(&self) -> Hash {
+        self.body.hash1
+    }
+
+    pub fn hash2(&self) -> Hash {
+        self.body.hash2
+    }
+
+    pub fn hashr(&self) -> Hash {
+        self.body.hashr
+    }
+
+    pub fn rpath1(&self) -> std::result::Result<&str, str::Utf8Error> {
+        str::from_utf8(&self.body.rpath1_str[..self.body.rpath1_len])
+    }
+
+    pub fn rpath2(&self) -> std::result::Result<&str, str::Utf8Error> {
+        str::from_utf8(&self.body.rpath2_str[..self.body.rpath2_len])
+    }
+
+    pub fn rpathr(&self) -> std::result::Result<&str, str::Utf8Error> {
+        str::from_utf8(&self.body.rpathr_str[..self.body.rpathr_len])
+    }
+
+    pub fn size_on_disk() -> u64 {
+        let mut size: usize;
+        size = mem::size_of::<usize>();
+        size += mem::size_of::<Hash>();
+        size as u64 + MetadataBody::size_on_disk()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Version {
+    app: [u8; 2],
+    major: u16,
+    minor: u16,
+    patch: u16,
+}
+
+impl Version {
+    pub fn serialise<W>(&self, write: &mut W) -> Result<()>
+    where
+        W: Write,
+    {
+        write.write_all(&self.app)?;
+        write.write_u16::<LittleEndian>(self.major)?;
+        write.write_u16::<LittleEndian>(self.minor)?;
+        write.write_u16::<LittleEndian>(self.patch)?;
+        Ok(())
+    }
+
+    pub fn deserialise<R>(&mut self, read: &mut R) -> Result<()>
+    where
+        R: Read,
+    {
+        read.read_exact(&mut self.app)?;
+        self.major = read.read_u16::<LittleEndian>()?;
+        self.minor = read.read_u16::<LittleEndian>()?;
+        self.patch = read.read_u16::<LittleEndian>()?;
+        Ok(())
+    }
+
+    pub fn verify_version(&self) -> Result<()> {
+        // Consider metadata with anything but the patch level
+        // different as incompatible.
+        if self.app == METADATA_VERSION.app && self.major == METADATA_VERSION.major
+            && self.minor == METADATA_VERSION.minor
+        {
+            Ok(())
+        } else {
+            Err(ErrorKind::VersionMismatch(METADATA_VERSION, self.clone()).into())
+        }
+    }
+}
+
+impl Debug for Version {
+    fn fmt(&self, f: &mut Formatter) -> std::result::Result<(), std::fmt::Error> {
+        let app_code = if let Ok(s) = str::from_utf8(&self.app) {
+            s
+        } else {
+            "unknown"
+        };
+        write!(
+            f,
+            "{} {}.{}.{}",
+            app_code,
+            self.major,
+            self.minor,
+            self.patch
+        )
+    }
+}
+
+#[repr(packed)]
+pub struct HashedBlockHeader {
+    hash: Hash,
+    len: [u8; 8],
+}
+
+impl HashedBlockHeader {
+    pub fn hash(&self) -> Hash {
+        self.hash
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> u64 {
+        (&self.len[..])
+            .read_u64::<LittleEndian>()
+            .expect("read_u64")
+    }
+
+    pub fn set_len(&mut self, len: u64) {
+        (&mut self.len[..])
+            .write_u64::<LittleEndian>(len)
+            .expect("write_u64")
+    }
+
+    pub fn size_on_disk() -> u64 {
+        mem::size_of::<Self>() as u64
+    }
+}
+
+pub struct HashedBlock<'a>(&'a mut [u8]);
+
+impl<'a> HashedBlock<'a> {
+    pub fn new(over: &mut &'a mut [u8], size: usize) -> Result<Self> {
+        // Allocate enough space for the header.
+        let blk_size = size + mem::size_of::<HashedBlockHeader>();
+
+        if blk_size > over.len() {
+            Err(ErrorKind::UnexpectedEndOfBlock(over.len(), blk_size).into())
+        } else {
+            let (this, rest) = mem::replace(over, &mut []).split_at_mut(blk_size);
+            *over = rest;
+
+            let mut block = HashedBlock(this);
+            block.header_mut().set_len(size as u64);
+            Ok(block)
+        }
+    }
+
+    pub fn from(over: &mut &'a mut [u8]) -> Result<Self> {
+        // Peek into the slice to find out the size of the block.
+        let size = {
+            let peek = HashedBlock(over);
+            peek.header().len() as usize + mem::size_of::<HashedBlockHeader>()
+        };
+
+        info!("peek size: {}", size);
+
+        if size > over.len() {
+            Err(ErrorKind::UnexpectedEndOfBlock(over.len(), size).into())
+        } else {
+            let (this, rest) = mem::replace(over, &mut []).split_at_mut(size);
+            *over = rest;
+
+            Ok(HashedBlock(this))
+        }
+    }
+
+    pub fn header(&self) -> &'a HashedBlockHeader {
+        unsafe { &*(self.0.as_ptr() as *const HashedBlockHeader) }
+    }
+
+    pub fn header_mut(&mut self) -> &'a mut HashedBlockHeader {
+        unsafe { &mut *(self.0.as_mut_ptr() as *mut HashedBlockHeader) }
+    }
+
+    pub fn hash_update(&mut self) {
+        let mut sha1 = Sha1::new();
+        sha1.update(self.as_slice());
+        self.header_mut().hash = sha1.digest().bytes();
+    }
+
+    pub fn hash_verify(&self) -> std::result::Result<(), ()> {
+        let mut sha1 = Sha1::new();
+        sha1.update(self.as_slice());
+        if self.header().hash == sha1.digest().bytes() {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        debug_assert_eq!(
+            self.header().len() as usize,
+            self.0.len() - mem::size_of::<HashedBlockHeader>()
+        );
+        &self.0[mem::size_of::<HashedBlockHeader>()..]
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        debug_assert_eq!(
+            self.header().len() as usize,
+            self.0.len() - mem::size_of::<HashedBlockHeader>()
+        );
+        &mut self.0[mem::size_of::<HashedBlockHeader>()..]
+    }
+
+    pub fn body_as_ref<T: Sized>(&self) -> &T {
+        debug_assert_eq!(mem::size_of::<T>(), self.0.len());
+        unsafe { &*(self.0.as_ptr() as *const T) }
+    }
+
+    pub fn body_as_mut<T: Sized>(&mut self) -> &mut T {
+        debug_assert_eq!(mem::size_of::<T>(), self.0.len());
+        unsafe { &mut *(self.0.as_mut_ptr() as *mut T) }
+    }
+}
+
+pub enum HashedBlockState<'a> {
+    Intact(HashedBlock<'a>),
+    Invalid(HashedBlock<'a>),
+    Incomplete,
+}
+
+pub struct HashedBlockIter<'a>(&'a mut [u8]);
+
+impl<'a> Iterator for HashedBlockIter<'a> {
+    type Item = HashedBlockState<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.0.is_empty() {
+            None
+        } else {
+            match HashedBlock::from(&mut self.0) {
+                Ok(block) => match block.hash_verify() {
+                    Ok(_) => Some(HashedBlockState::Intact(block)),
+                    Err(_) => Some(HashedBlockState::Invalid(block)),
+                },
+                Err(error) => match *error.kind() {
+                    ErrorKind::UnexpectedEndOfBlock(_, _) => {
+                        self.0 = &mut [];
+                        Some(HashedBlockState::Incomplete)
+                    }
+                    ref err => panic!("unexpected error: {:?}", err),
+                },
+            }
+        }
+    }
+}
+
+pub fn hashed_blocks(bytes: &mut [u8]) -> HashedBlockIter {
+    HashedBlockIter(bytes)
+}
+
+pub fn redundancy_alloc(data1: &[u8], data2: &[u8]) -> Vec<u8> {
+    assert_eq!(data1.len(), data2.len());
+    let mut out = Vec::<u8>::with_capacity(data1.len());
+    unsafe {
+        out.set_len(data1.len());
+    }
+    {
+        let out_slice = &mut out;
+        for i in 0..data1.len() {
+            out_slice[i] = data1[i] ^ data2[i];
+        }
+    }
+    out
+}
+
+pub fn redundancy(data1: &[u8], data2: &[u8], out: &mut [u8]) {
+    assert_eq!(data1.len(), data2.len());
+    assert_eq!(data1.len(), out.len());
+    for i in 0..data1.len() {
+        out[i] = data1[i] ^ data2[i];
+    }
+}
+
+pub fn redundancy_copy(data1: &[u8], data2: &[u8], out: &mut [u8]) {
+    let (short, long, short_len) = if data1.len() < data2.len() {
+        (data1, data2, data1.len())
+    } else {
+        (data2, data1, data2.len())
+    };
+    let (long_xor, long_copy) = long.split_at(short_len);
+    let (out_xor, out_copy) = out.split_at_mut(short_len);
+    redundancy_copy_impl(short, long_xor, long_copy, out_xor, out_copy);
+}
+
+fn redundancy_copy_impl(
+    short: &[u8],
+    long_xor: &[u8],
+    long_copy: &[u8],
+    out_xor: &mut [u8],
+    out_copy: &mut [u8],
+) {
+    redundancy(short, long_xor, out_xor);
+
+    /*
+     * Copy over the rest of the longer input file.
+     */
+    out_copy.copy_from_slice(long_copy);
+}
+
+#[cfg(test)]
+mod tests {
+    use redundancy::HashedBlock;
+    use redundancy::HashedBlockHeader;
+    use redundancy::HashedBlockState;
+    use redundancy::hashed_blocks;
+    use redundancy::redundancy;
+    use redundancy::redundancy_copy;
+    use std::mem;
+
+    #[test]
+    fn test_redundancy() {
+        let data1 = [0u8, 30, 128, 10, 84];
+        let data2 = [90u8, 1, 74, 121, 3];
+        let mut out = [0u8; 5];
+        redundancy(&data1, &data2, &mut out);
+        assert_eq!(out, [90u8, 31, 202, 115, 87]);
+    }
+
+    #[test]
+    fn test_redundancy_copy() {
+        let data1 = [0u8, 30, 128, 10, 84, b'a', b'b', b'c', b'd', b'e', b'f'];
+        let data2 = [90u8, 1, 74, 121, 3];
+        let mut out = [0u8; 11];
+        redundancy_copy(&data1, &data2, &mut out);
+        assert_eq!(
+            out,
+            [90u8, 31, 202, 115, 87, b'a', b'b', b'c', b'd', b'e', b'f']
+        );
+    }
+
+    #[test]
+    fn test_hashed_block() {
+        let mut array = [0u8; 256];
+
+        {
+            let mut slice = &mut array[..];
+            let block = HashedBlock::new(&mut slice, 200);
+            assert!(block.is_ok());
+            block.unwrap().hash_update();
+            assert_eq!(slice.len(), 56 - mem::size_of::<HashedBlockHeader>());
+
+            assert!(HashedBlock::new(&mut slice, 23).is_err());
+        }
+
+        let mut slice = &mut array[..];
+        let block = HashedBlock::from(&mut slice).expect("HashedBlock::from");
+        assert!(block.hash_verify().is_ok());
+    }
+
+    #[test]
+    fn test_hashed_block_iter() {
+        let mut array = [0u8; 256];
+
+        {
+            let mut slice = &mut array[..];
+            let block = HashedBlock::new(&mut slice, 22);
+            assert!(block.is_ok());
+            block.unwrap().hash_update();
+            let block = HashedBlock::new(&mut slice, 175);
+            assert!(block.is_ok());
+        }
+
+        {
+            let mut iter = hashed_blocks(&mut array);
+            let next = iter.next();
+            assert!(next.is_some());
+            match next.unwrap() {
+                HashedBlockState::Intact(_) => (),
+                _ => panic!("incorrect hashed block state: expected Intact"),
+            }
+
+            let next = iter.next();
+            assert!(next.is_some());
+            match next.unwrap() {
+                HashedBlockState::Invalid(_) => (),
+                _ => panic!("incorrect hashed block state: expected Invalid"),
+            }
+
+            let next = iter.next();
+            assert!(next.is_some());
+            match next.unwrap() {
+                HashedBlockState::Incomplete => (),
+                _ => panic!("incorrect hashed block state: expected Incomplete"),
+            }
+
+            assert!(iter.next().is_none());
+        }
+    }
+}

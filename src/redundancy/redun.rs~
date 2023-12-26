@@ -1,0 +1,41 @@
+use block::Block;
+use layout::Layout;
+use medium::Medium;
+use std::fs::File;
+use tempfile::NamedTempFile;
+
+#[derive(Debug, Default)]
+pub struct RedunFile {
+    used_blocks: usize,
+    file: Option<NamedTempFile>,
+    max_blocks: usize,
+    key: String,
+    hash: [u8; 20],
+}
+
+impl RedunFile {
+    pub fn new(max_blocks: usize) -> Self {
+        RedunFile {
+            used_blocks: 0,
+            file: None,
+            max_blocks,
+            key: Default::default(),
+            hash: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Redundancy<'a> {
+    left: &'a Medium,
+    right: &'a Medium,
+    redun: &'a Medium,
+    curr_file: Option<RedunFile>,
+}
+
+
+impl<'a> Redundancy<'a> {
+    pub fn new(left: &'a Medium, right: &'a Medium, redun: &'a Medium) -> Self {
+        unimplemented!()
+    }
+}

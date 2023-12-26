@@ -1,0 +1,2 @@
+pub struct CoupledIter<Iter1, Iter2> {
+}

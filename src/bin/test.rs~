@@ -1,0 +1,21 @@
+extern crate sdb;
+extern crate sql_lexer;
+
+use sdb::parser::{AstNode, Parser};
+use sql_lexer::lexer;
+
+fn main() {
+    let lexer = lexer("INSERT INTO catalog ('key', 'caps') VALUES ('test', \
+                       'whatever')");
+    let parser = Parser::new();
+
+    for _ in 0..1000000 {
+        let tree = parser.parse(lexer.iter().skip_ws());
+        for c in tree.unwrap().into_children("SELECT_STMT") {
+            match c {
+                AstNode::Ident(_) => break,
+                _ => (),
+            }
+        }
+    }
+}

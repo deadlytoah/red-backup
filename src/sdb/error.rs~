@@ -1,0 +1,50 @@
+#[derive(Debug)]
+pub struct Error {
+    pub cause: Option<Box<ErrorTrait>>
+}
+
+impl Error {
+    pub fn new<E>(cause: E) -> Self
+        where E: Into<Box<ErrorTrait>> {
+        Error {
+            cause: Option::Some(cause.into())
+        }
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        write!(f, "{} caused by {}", self.description(), self.cause().unwrap())
+    }
+}
+
+impl ErrorTrait for Error {
+    fn description(&self) -> &str {
+        "Database error"
+    }
+
+    fn cause(&self) -> Option<&ErrorTrait> {
+        match self.cause {
+            Some(ref boxed) => Some(boxed.as_ref()),
+            None => None
+        }
+    }
+}
+
+impl From<IOError> for Error {
+    fn from(io_error: IOError) -> Error {
+        Error::new(io_error)
+    }
+}
+
+impl From<ParseIntError> for Error {
+    fn from(error: ParseIntError) -> Error {
+        Error::new(error)
+    }
+}
+
+impl From<SerdeJsonError> for Error {
+    fn from(error: SerdeJsonError) -> Error {
+        Error::new(error)
+    }
+}

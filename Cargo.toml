@@ -1,0 +1,33 @@
+[package]
+name = "ideas"
+version = "0.1.0"
+authors = ["Chris Shin <heesuk@gmail.com>"]
+
+[features]
+default = []
+binary-tables = ["bincode"]
+debug = []
+
+[dependencies]
+cfg-if = "*"
+clap = "*"
+error-chain = "*"
+itertools = "*"
+libc = "*"
+rand = "*"
+rust-crypto = "*"
+serde = "*"
+serde_derive = "*"
+serde_json = "*"
+sha1 = "*"
+slog = { version = "*", features = ["max_level_trace", "release_max_level_warn"] }
+slog-async = "*"
+slog-json = "*"
+slog-scope = "*"
+slog-term = "*"
+tempdir = "*"
+tempfile = "*"
+time = "*"
+verifile = { version = "*", path = "../verifile" }
+
+bincode = { version = "*", optional = true }
